@@ -1,0 +1,296 @@
+#!/bin/bash
+
+# Configuration
+LLM_CMD="gemini" # Default to gemini, change to claude if needed
+PROMPTS_DIR="cli/prompts"
+REGISTER_FILE="register.md"
+DOMAINS_DIR="domains"
+
+# Check if LLM CLI is available
+if ! command -v "$LLM_CMD" &> /dev/null; then
+    echo "Error: $LLM_CMD cli not found. Please install it or update the script."
+    exit 1
+fi
+
+COMMAND=$1
+shift
+USER_INPUT="$@"
+
+case $COMMAND in
+  capture)
+    if [ -z "$USER_INPUT" ]; then
+      echo "Usage: $0 capture <note content | url | file path>"
+      exit 1
+    fi
+    
+    # Determine input type
+    if [[ "$USER_INPUT" =~ ^https?:// ]]; then
+      echo "Fetching URL content..."
+      RAW_CONTENT=$(curl -sL "$USER_INPUT")
+      if [ -z "$RAW_CONTENT" ]; then
+        echo "Error: Failed to fetch URL or empty response."
+        exit 1
+      fi
+      SOURCE_TYPE="URL: $USER_INPUT"
+    elif [[ "$USER_INPUT" =~ \.[pP][dD][fF]$ ]]; then
+      echo "Error: PDF files cannot be processed directly. Please convert to text first."
+      exit 1
+    elif [ -f "$USER_INPUT" ]; then
+      echo "Reading file..."
+      RAW_CONTENT=$(cat "$USER_INPUT")
+      SOURCE_TYPE="File: $USER_INPUT"
+    else
+      RAW_CONTENT="$USER_INPUT"
+      SOURCE_TYPE="User Input"
+    fi
+
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/capture.md")
+    
+    # We use a temp file to safely construct the prompt with potentially large content
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Source Context: $SOURCE_TYPE" >> "$TMP_PROMPT"
+    echo "User Input:" >> "$TMP_PROMPT"
+    echo "$RAW_CONTENT" >> "$TMP_PROMPT"
+    
+    echo "Processing note..."
+    RESPONSE=$($LLM_CMD "$(cat "$TMP_PROMPT")")
+    rm "$TMP_PROMPT"
+    
+    if [ $? -eq 0 ]; then
+      echo "" >> "$REGISTER_FILE"
+      echo "$RESPONSE" >> "$REGISTER_FILE"
+      echo "------------------------------------------------"
+      echo "$RESPONSE"
+      echo "------------------------------------------------"
+      echo "Note added to $REGISTER_FILE"
+    else
+      echo "Error calling LLM."
+    fi
+    ;;
+
+  classify)
+    # Setup directories
+    MERGES_DIR="outputs/merges/pending"
+    ARCHIVE_DIR="outputs/register_archive"
+    mkdir -p "$MERGES_DIR" "$ARCHIVE_DIR"
+
+    # If input is provided, classify that directly (do not archive register)
+    if [ -n "$USER_INPUT" ]; then
+      NOTE_CONTENT="$USER_INPUT"
+      SOURCE_REF="manual_input"
+    else
+      # Process register.md
+      if [ -f "$REGISTER_FILE" ] && [ -s "$REGISTER_FILE" ]; then
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        ARCHIVED_REGISTER="$ARCHIVE_DIR/register_$TIMESTAMP.md"
+        
+        # Archive the current register
+        mv "$REGISTER_FILE" "$ARCHIVED_REGISTER"
+        touch "$REGISTER_FILE"
+        echo "Archived $REGISTER_FILE to $ARCHIVED_REGISTER"
+        
+        NOTE_CONTENT=$(cat "$ARCHIVED_REGISTER")
+        SOURCE_REF="register_$TIMESTAMP"
+      else
+        echo "Error: No input provided and $REGISTER_FILE is empty or missing."
+        exit 1
+      fi
+    fi
+
+    # Build Domain Map
+    echo "Building Domain Map..."
+    DOMAIN_MAP=$(find "$DOMAINS_DIR" -name "index.md" -print0 | xargs -0 -I {} sh -c 'echo "--- File: {} ---"; cat {}; echo ""')
+
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/classify.md")
+    
+    # Construct prompt via concatenation
+    # We use a temp file to handle the large context safely
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "DOMAIN MAP:" >> "$TMP_PROMPT"
+    echo "$DOMAIN_MAP" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Input Note from Register:" >> "$TMP_PROMPT"
+    echo "$NOTE_CONTENT" >> "$TMP_PROMPT"
+    
+    echo "Classifying content..."
+    RESPONSE=$($LLM_CMD "$(cat "$TMP_PROMPT")")
+    rm "$TMP_PROMPT"
+    
+    # Save to pending
+    TIMESTAMP=$(date +%Y%m%d%H%M%S)
+    MERGE_FILE="$MERGES_DIR/merge_${TIMESTAMP}.md"
+    
+    echo "$RESPONSE" > "$MERGE_FILE"
+    
+    if [ -f "$MERGE_FILE" ]; then
+        echo "------------------------------------------------"
+        cat "$MERGE_FILE"
+        echo "------------------------------------------------"
+        echo "Merge proposal created: $MERGE_FILE"
+        echo "Status: PENDING"
+        echo "To approve, move content to domains and run: $0 merge $(basename $MERGE_FILE)"
+    else
+        echo "Error writing merge file."
+    fi
+    ;;
+
+  merge)
+    FILENAME=$USER_INPUT
+    PENDING_DIR="outputs/merges/pending"
+    PROCESSED_DIR="outputs/merges/processed"
+    mkdir -p "$PROCESSED_DIR"
+    
+    if [ -z "$FILENAME" ]; then
+      echo "Usage: $0 merge <filename>"
+      echo "Available pending merges:"
+      ls "$PENDING_DIR"
+      exit 1
+    fi
+    
+    BASENAME=$(basename "$FILENAME")
+    SOURCE_FILE="$PENDING_DIR/$BASENAME"
+    
+    if [ ! -f "$SOURCE_FILE" ]; then
+      echo "Error: File $SOURCE_FILE not found."
+      exit 1
+    fi
+    
+    # Create temp dir for splitting
+    SPLIT_DIR=$(mktemp -d)
+    
+    # Split the file into individual entries
+    # We use awk to write to separate files prefixed with split_ in the temp dir
+    awk -v out="$SPLIT_DIR/split_" '/^## Entry ID/{n++} {print > (out n ".md")}' "$SOURCE_FILE"
+    
+    # Check if any files were created
+    if [ -z "$(ls -A "$SPLIT_DIR")" ]; then
+       echo "Error: No valid entries found in $SOURCE_FILE (missing '## Entry ID' header?)"
+       rm -rf "$SPLIT_DIR"
+       exit 1
+    fi
+    
+    # Loop through each split entry
+    for ENTRY_FILE in "$SPLIT_DIR"/*.md; do
+        echo "Processing entry: $(basename "$ENTRY_FILE")..."
+        
+        # Extract Target File and clean it
+        RAW_TARGET=$(grep "Target File:" "$ENTRY_FILE" | head -n 1 | cut -d ':' -f 2)
+        TARGET_FILE=$(echo "$RAW_TARGET" | sed 's/ (New)//g' | sed 's/ (Existing)//g' | xargs)
+        
+        if [ -z "$TARGET_FILE" ]; then
+          echo "  Warning: Could not parse 'Target File' from entry. Skipping."
+          continue
+        fi
+        
+        # Check if we need to create a new file
+        if [ ! -f "$TARGET_FILE" ]; then
+            echo "  Creating new file: $TARGET_FILE"
+            mkdir -p "$(dirname "$TARGET_FILE")"
+            touch "$TARGET_FILE"
+            
+            # Extract Index Update
+            INDEX_UPDATE=$(awk '/### Index Update/{flag=1; next} /### Conflicts Detected/{flag=0} flag' "$ENTRY_FILE")
+            
+            if [ -n "$INDEX_UPDATE" ]; then
+                PARENT_DIR=$(dirname "$TARGET_FILE")
+                INDEX_FILE="$PARENT_DIR/index.md"
+                
+                if [ -f "$INDEX_FILE" ]; then
+                    echo "  Updating index: $INDEX_FILE"
+                    TMP_INDEX=$(mktemp)
+                    while IFS= read -r line; do
+                        echo "$line" >> "$TMP_INDEX"
+                        if [[ "$line" == "## Active Topics" ]]; then
+                            echo "$INDEX_UPDATE" >> "$TMP_INDEX"
+                        fi
+                    done < "$INDEX_FILE"
+                    mv "$TMP_INDEX" "$INDEX_FILE"
+                else
+                    echo "  Warning: Parent index $INDEX_FILE not found. Skipping index update."
+                fi
+            fi
+        fi
+        
+        # Extract content to merge
+        CONTENT_TO_MERGE=$(awk '/### Proposed Insert/{flag=1; next} /### Index Update/{flag=0} /### Conflicts Detected/{flag=0} flag' "$ENTRY_FILE")
+        
+        if [ -z "$CONTENT_TO_MERGE" ]; then
+            echo "  Warning: No content found in 'Proposed Insert' section. Skipping."
+            continue
+        fi
+        
+        echo "  Merging content into $TARGET_FILE..."
+        echo "" >> "$TARGET_FILE"
+        echo "$CONTENT_TO_MERGE" >> "$TARGET_FILE"
+    done
+    
+    # Cleanup temp dir
+    rm -rf "$SPLIT_DIR"
+    
+    echo "Success. Moving proposal to processed."
+    mv "$SOURCE_FILE" "$PROCESSED_DIR/"
+    ;;
+
+  approve)
+    FILENAME=$USER_INPUT
+    PENDING_DIR="outputs/merges/pending"
+    PROCESSED_DIR="outputs/merges/processed"
+    mkdir -p "$PROCESSED_DIR"
+    
+    if [ -z "$FILENAME" ]; then
+      echo "Usage: $0 approve <filename>"
+      echo "Available pending merges:"
+      ls "$PENDING_DIR"
+      exit 1
+    fi
+    
+    # Handle if user passed full path or just filename
+    BASENAME=$(basename "$FILENAME")
+    SOURCE_FILE="$PENDING_DIR/$BASENAME"
+    
+    if [ -f "$SOURCE_FILE" ]; then
+      mv "$SOURCE_FILE" "$PROCESSED_DIR/"
+      echo "Marked $BASENAME as PROCESSED."
+    else
+      echo "Error: File $SOURCE_FILE not found."
+    fi
+    ;;
+
+  question)
+    if [ -z "$USER_INPUT" ]; then
+      echo "Usage: $0 question <your question>"
+      exit 1
+    fi
+    
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/question.md")
+    # Use find for portability (macOS bash 3.2 doesn't support globstar)
+    CONTEXT=$(find "$DOMAINS_DIR" -name "*.md" -exec cat {} +)
+    
+    # We use a temp file to construct the prompt to avoid arg length limits/messiness
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Context:" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Question:" >> "$TMP_PROMPT"
+    echo "$USER_INPUT" >> "$TMP_PROMPT"
+    
+    echo "Thinking..."
+    # Passing file content if CLI supports it, otherwise cat it
+    # Assuming generic CLI takes string arg
+    FULL_PROMPT_CONTENT=$(cat "$TMP_PROMPT")
+    $LLM_CMD "$FULL_PROMPT_CONTENT"
+    
+    rm "$TMP_PROMPT"
+    ;;
+
+  *)
+    echo "Usage: $0 {capture|classify|question} [arguments]"
+    exit 1
+    ;;
+esac

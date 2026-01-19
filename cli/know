@@ -1,10 +1,28 @@
 #!/bin/bash
 
 # Configuration
-LLM_CMD="gemini" # Default to gemini, change to claude if needed
+LLM_CMD="gemini" # Default to gemini
+LLM_ARGS=""
 PROMPTS_DIR="cli/prompts"
 REGISTER_FILE="register.md"
 DOMAINS_DIR="domains"
+LESSONS_DIR="lessons"
+ANSWERS_DIR="outputs/answers"
+
+# Parse global options (before command)
+while [[ $# -gt 0 && "$1" == --* ]]; do
+    case "$1" in
+        --claude)
+            LLM_CMD="claude"
+            LLM_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 # Check if LLM CLI is available
 if ! command -v "$LLM_CMD" &> /dev/null; then
@@ -14,12 +32,35 @@ fi
 
 COMMAND=$1
 shift
-USER_INPUT="$@"
+# Remaining arguments are in "$@"
 
 case $COMMAND in
   capture)
+    AUTO_MERGE=0
+    INPUT_ARGS=""
+    
+    # Parse args for this command
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --auto-merge|-a)
+          AUTO_MERGE=1
+          shift
+          ;;
+        *)
+          if [ -n "$INPUT_ARGS" ]; then
+            INPUT_ARGS="$INPUT_ARGS $1"
+          else
+            INPUT_ARGS="$1"
+          fi
+          shift
+          ;;
+      esac
+    done
+    
+    USER_INPUT="$INPUT_ARGS"
+
     if [ -z "$USER_INPUT" ]; then
-      echo "Usage: $0 capture <note content | url | file path>"
+      echo "Usage: $0 capture [--auto-merge/-a] <note content | url | file path>"
       exit 1
     fi
     
@@ -36,9 +77,35 @@ case $COMMAND in
       echo "Error: PDF files cannot be processed directly. Please convert to text first."
       exit 1
     elif [ -f "$USER_INPUT" ]; then
-      echo "Reading file..."
-      RAW_CONTENT=$(cat "$USER_INPUT")
-      SOURCE_TYPE="File: $USER_INPUT"
+      # Check if it's a URL list (first line starts with http)
+      FIRST_LINE=$(head -n 1 "$USER_INPUT")
+      if [[ "$FIRST_LINE" =~ ^https?:// ]]; then
+          echo "Detected Batch URL List..."
+          SOURCE_TYPE="Batch URL List: $USER_INPUT"
+          RAW_CONTENT=""
+          
+          while IFS= read -r url || [ -n "$url" ]; do
+              # Skip empty lines
+              if [ -z "$url" ]; then continue; fi
+              
+              echo "  Fetching: $url"
+              FETCHED=$(curl -sL "$url")
+              if [ -n "$FETCHED" ]; then
+                  RAW_CONTENT+=$'\n'"--- Source: $url ---"$'\n'"$FETCHED"$'\n'
+              else
+                  echo "  Warning: Failed to fetch $url"
+              fi
+          done < "$USER_INPUT"
+          
+          if [ -z "$RAW_CONTENT" ]; then
+              echo "Error: No content fetched from batch list."
+              exit 1
+          fi
+      else
+          echo "Reading file..."
+          RAW_CONTENT=$(cat "$USER_INPUT")
+          SOURCE_TYPE="File: $USER_INPUT"
+      fi
     else
       RAW_CONTENT="$USER_INPUT"
       SOURCE_TYPE="User Input"
@@ -55,7 +122,7 @@ case $COMMAND in
     echo "$RAW_CONTENT" >> "$TMP_PROMPT"
     
     echo "Processing note..."
-    RESPONSE=$($LLM_CMD "$(cat "$TMP_PROMPT")")
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
     rm "$TMP_PROMPT"
     
     if [ $? -eq 0 ]; then
@@ -65,12 +132,65 @@ case $COMMAND in
       echo "$RESPONSE"
       echo "------------------------------------------------"
       echo "Note added to $REGISTER_FILE"
+      
+      if [ "$AUTO_MERGE" -eq 1 ]; then
+        echo "================================================"
+        echo "🔄 Auto-Merge Triggered"
+        echo "================================================"
+        
+        # Run classify
+        "$0" classify
+        
+        # Find the latest pending merge file
+        # We look for the most recent .md file in the pending directory
+        LATEST_MERGE=$(ls -t outputs/merges/pending/*.md 2>/dev/null | head -n 1)
+        
+        if [ -n "$LATEST_MERGE" ]; then
+            FILENAME=$(basename "$LATEST_MERGE")
+            echo "Merging proposal: $FILENAME"
+            "$0" merge "$FILENAME"
+        else
+            echo "Error: Could not find generated merge proposal."
+        fi
+      fi
     else
       echo "Error calling LLM."
     fi
     ;;
 
+  learn)
+    USER_INPUT="$@"
+    if [ -z "$USER_INPUT" ]; then
+      echo "Usage: $0 learn <correction or insight>"
+      exit 1
+    fi
+    
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/learn.md")
+    
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Input:" >> "$TMP_PROMPT"
+    echo "$USER_INPUT" >> "$TMP_PROMPT"
+    
+    echo "Processing lesson..."
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+    
+    TIMESTAMP=$(date +%Y%m%d%H%M%S)
+    LESSON_FILE="$LESSONS_DIR/answers/L-$TIMESTAMP.md"
+    mkdir -p "$LESSONS_DIR/answers"
+    
+    echo "$RESPONSE" > "$LESSON_FILE"
+    
+    echo "------------------------------------------------"
+    cat "$LESSON_FILE"
+    echo "------------------------------------------------"
+    echo "Lesson saved to $LESSON_FILE"
+    ;;
+
   classify)
+    USER_INPUT="$@"
     # Setup directories
     MERGES_DIR="outputs/merges/pending"
     ARCHIVE_DIR="outputs/register_archive"
@@ -106,7 +226,6 @@ case $COMMAND in
     PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/classify.md")
     
     # Construct prompt via concatenation
-    # We use a temp file to handle the large context safely
     TMP_PROMPT=$(mktemp)
     echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
     echo "" >> "$TMP_PROMPT"
@@ -117,7 +236,7 @@ case $COMMAND in
     echo "$NOTE_CONTENT" >> "$TMP_PROMPT"
     
     echo "Classifying content..."
-    RESPONSE=$($LLM_CMD "$(cat "$TMP_PROMPT")")
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
     rm "$TMP_PROMPT"
     
     # Save to pending
@@ -139,7 +258,25 @@ case $COMMAND in
     ;;
 
   merge)
-    FILENAME=$USER_INPUT
+    if [[ "$1" == "--all" || "$1" == "-a" ]]; then
+      PENDING_DIR="outputs/merges/pending"
+      if [ ! -d "$PENDING_DIR" ] || [ -z "$(ls -A "$PENDING_DIR")" ]; then
+        echo "No pending merges found."
+        exit 0
+      fi
+      
+      echo "Merging all pending proposals..."
+      for file in "$PENDING_DIR"/*.md; do
+        if [ -f "$file" ]; then
+            filename=$(basename "$file")
+            echo ">> Processing $filename"
+            "$0" merge "$filename"
+        fi
+      done
+      exit 0
+    fi
+
+    FILENAME="$1"
     PENDING_DIR="outputs/merges/pending"
     PROCESSED_DIR="outputs/merges/processed"
     mkdir -p "$PROCESSED_DIR"
@@ -236,7 +373,7 @@ case $COMMAND in
     ;;
 
   approve)
-    FILENAME=$USER_INPUT
+    FILENAME="$1"
     PENDING_DIR="outputs/merges/pending"
     PROCESSED_DIR="outputs/merges/processed"
     mkdir -p "$PROCESSED_DIR"
@@ -261,16 +398,36 @@ case $COMMAND in
     ;;
 
   question)
-    if [ -z "$USER_INPUT" ]; then
-      echo "Usage: $0 question <your question>"
+    SAVE_MODE=0
+    QUESTION_TEXT=""
+    
+    # Parse args for this command
+    while [[ $# -gt 0 ]]; do
+      key="$1"
+      case $key in
+        --save|-s)
+          SAVE_MODE=1
+          shift
+          ;;
+        *)
+          QUESTION_TEXT="$QUESTION_TEXT $1"
+          shift
+          ;;
+      esac
+    done
+    
+    # Trim leading space
+    QUESTION_TEXT=$(echo "$QUESTION_TEXT" | sed 's/^[[:space:]]*//')
+    
+    if [ -z "$QUESTION_TEXT" ]; then
+      echo "Usage: $0 question [--save] <your question>"
       exit 1
     fi
     
     PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/question.md")
-    # Use find for portability (macOS bash 3.2 doesn't support globstar)
-    CONTEXT=$(find "$DOMAINS_DIR" -name "*.md" -exec cat {} +)
+    # Include both DOMAINS and LESSONS in the context
+    CONTEXT=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
     
-    # We use a temp file to construct the prompt to avoid arg length limits/messiness
     TMP_PROMPT=$(mktemp)
     echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
     echo "" >> "$TMP_PROMPT"
@@ -278,19 +435,178 @@ case $COMMAND in
     echo "$CONTEXT" >> "$TMP_PROMPT"
     echo "" >> "$TMP_PROMPT"
     echo "User Question:" >> "$TMP_PROMPT"
-    echo "$USER_INPUT" >> "$TMP_PROMPT"
+    echo "$QUESTION_TEXT" >> "$TMP_PROMPT"
     
     echo "Thinking..."
-    # Passing file content if CLI supports it, otherwise cat it
-    # Assuming generic CLI takes string arg
-    FULL_PROMPT_CONTENT=$(cat "$TMP_PROMPT")
-    $LLM_CMD "$FULL_PROMPT_CONTENT"
+    TMP_OUTPUT=$(mktemp)
+    cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS > "$TMP_OUTPUT" 2>&1
+    RESPONSE=$(cat "$TMP_OUTPUT")
+    rm "$TMP_PROMPT" "$TMP_OUTPUT"
+
+    if [ "$SAVE_MODE" -eq 1 ]; then
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        mkdir -p "$ANSWERS_DIR"
+        OUT_FILE="$ANSWERS_DIR/A-$TIMESTAMP.md"
+        
+        echo "# Answer Record: A-$TIMESTAMP" > "$OUT_FILE"
+        echo "**Date:** $(date)" >> "$OUT_FILE"
+        echo "**Question:** $QUESTION_TEXT" >> "$OUT_FILE"
+        echo "" >> "$OUT_FILE"
+        echo "## Answer" >> "$OUT_FILE"
+        echo "$RESPONSE" >> "$OUT_FILE"
+        
+        echo "Answer saved to: $OUT_FILE"
+        echo "------------------------------------------------"
+        cat "$OUT_FILE"
+        echo "------------------------------------------------"
+    else
+        echo "$RESPONSE"
+    fi
+    ;;
     
+  refresh)
+    FILENAME="$1"
+    
+    if [ -z "$FILENAME" ]; then
+        echo "Usage: $0 refresh <answer_file>"
+        exit 1
+    fi
+    
+    if [ ! -f "$FILENAME" ]; then
+        echo "Error: File $FILENAME not found."
+        exit 1
+    fi
+    
+    # Extract Original Question
+    ORIGINAL_QUESTION=$(grep "\*\*Question:\*\*" "$FILENAME" | cut -d ':' -f 2- | xargs)
+    
+    if [ -z "$ORIGINAL_QUESTION" ]; then
+        echo "Error: Could not extract question from $FILENAME."
+        exit 1
+    fi
+    
+    echo "Re-running question: $ORIGINAL_QUESTION"
+    
+    # Re-run LLM
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/question.md")
+    # Include LESSONS here too
+    CONTEXT=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+    
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Context:" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Question:" >> "$TMP_PROMPT"
+    echo "$ORIGINAL_QUESTION" >> "$TMP_PROMPT"
+    
+    echo "Thinking..."
+    NEW_RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
     rm "$TMP_PROMPT"
+    
+    # Create temp file with new content for diffing
+    TMP_NEW=$(mktemp)
+    sed '/## Answer/q' "$FILENAME" > "$TMP_NEW"
+    echo "$NEW_RESPONSE" >> "$TMP_NEW"
+    
+    echo "Diff (Original vs New):"
+    echo "------------------------------------------------"
+    diff "$FILENAME" "$TMP_NEW"
+    echo "------------------------------------------------"
+    
+    read -p "Accept new version? (y/n): " CONFIRM
+    if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
+        mv "$TMP_NEW" "$FILENAME"
+        echo "Updated $FILENAME."
+    else
+        echo "Kept original version."
+        rm "$TMP_NEW"
+    fi
+    ;;
+
+  garden)
+    echo "================================================"
+    echo "🌿 Knowledge Garden Audit"
+    echo "================================================"
+    
+    echo ""
+    echo "🍂 Stale Files (>60 days since update):"
+    STALE_FILES=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -mtime +60 2>/dev/null)
+    if [ -z "$STALE_FILES" ]; then
+        echo "   (None - Good job!)"
+    else
+        echo "$STALE_FILES"
+    fi
+
+    echo ""
+    echo "🕸️  Empty Files (0 bytes):"
+    EMPTY_FILES=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -type f -empty 2>/dev/null)
+    if [ -z "$EMPTY_FILES" ]; then
+        echo "   (None)"
+    else
+        echo "$EMPTY_FILES"
+    fi
+    
+    echo ""
+    echo "👻 Orphaned Files (Not referenced in parent index):"
+    # Logic: Find leaf files, check if filename exists in parent index.md
+    find "$DOMAINS_DIR" -name "*.md" ! -name "index.md" -print0 | while IFS= read -r -d '' file; do
+        dir=$(dirname "$file")
+        filename=$(basename "$file")
+        index_file="$dir/index.md"
+        
+        # If index exists, check content
+        if [ -f "$index_file" ]; then
+            if ! grep -q "$filename" "$index_file"; then
+                echo "   $file (missing from $(basename "$dir")/index.md)"
+            fi
+        fi
+    done
+    echo "================================================"
+    ;;
+
+  challenge)
+    USER_INPUT="$@"
+    if [ -z "$USER_INPUT" ]; then
+      echo "Usage: $0 challenge <proposal text | file path>"
+      exit 1
+    fi
+    
+    # Determine input type
+    if [ -f "$USER_INPUT" ]; then
+      echo "Reading proposal file..."
+      PROPOSAL_CONTENT=$(cat "$USER_INPUT")
+    else
+      PROPOSAL_CONTENT="$USER_INPUT"
+    fi
+
+    PROMPT_TEMPLATE=$(cat "$PROMPTS_DIR/challenge.md")
+    # Gather broad context
+    CONTEXT=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+    
+    TMP_PROMPT=$(mktemp)
+    echo "$PROMPT_TEMPLATE" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Context (Knowledge Base):" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Proposal:" >> "$TMP_PROMPT"
+    echo "$PROPOSAL_CONTENT" >> "$TMP_PROMPT"
+    
+    echo "⚔️  Challenging your proposal..."
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+    
+    echo "------------------------------------------------"
+    echo "$RESPONSE"
+    echo "------------------------------------------------"
     ;;
 
   *)
-    echo "Usage: $0 {capture|classify|question} [arguments]"
+    echo "Usage: $0 [--claude] {capture|classify|question|learn|refresh|garden|challenge} [arguments]"
+    echo "Options:"
+    echo "  --claude    Use Claude instead of Gemini (default), with web search enabled"
     exit 1
     ;;
 esac

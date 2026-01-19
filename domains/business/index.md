@@ -4,6 +4,7 @@
 This domain covers the internal business strategy, financial metrics, pricing models, and operational goals of the SolarWinds Service Desk.
 
 ## Active Topics
+- [Financial Performance](financial_performance.md): Tracking ARR, bookings, regional revenue breakdowns, and financial OKRs.
 - *No active topics tracked yet.*
 
 ## Open Questions

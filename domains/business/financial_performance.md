@@ -1,0 +1,24 @@
+
+```markdown
+# Financial Performance
+
+## Annual Recurring Revenue (ARR)
+- **Total ARR**: $43.5 Million (Source: User Input, 2026-01-19)
+
+## 2026 Objectives (OKRs)
+- **Revenue Goal**: Increase revenue across all geographic regions (NA, EMEA, APAC, LATAM).
+
+## Regional Performance Metrics
+### Global Bookings
+- **Total**: $2.96M
+
+### Regional Breakdown
+| Region | Total Contribution | New Business | Expansion | Uplift |
+| :--- | :--- | :--- | :--- | :--- |
+| **North America (NA)** | $2.38M | $623K | $1.3M | $464K |
+| **EMEA** | $434K | $166K | $210K | $59K |
+| **APAC** | $122K | $71K | $35K | $16K |
+| **LATAM** | $19K | - | - | - |
+
+*(Data captured 2026-01-19)*
+```

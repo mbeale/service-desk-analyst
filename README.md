@@ -274,8 +274,37 @@ Then run:
 
 
 
+## 8. Debate (Adversarial Collaboration)
 
+**Goal:** Get a higher-quality answer through multi-model critique and synthesis.
 
+The debate command runs a 3-round adversarial collaboration between Gemini and Claude:
+
+**Default (Gemini first):**
+```bash
+./cli/know debate "What pricing model should we use for the MSP segment?"
+```
+- Round 1: Gemini answers the question
+- Round 2: Claude critiques (5 issues: assumptions, missing info, reasoning) and rewrites
+- Round 3: Gemini critiques Claude's rewrite and produces final answer
+
+**With --claude (Claude first):**
+```bash
+./cli/know --claude debate "What pricing model should we use for the MSP segment?"
+```
+- Round 1: Claude answers (with web search)
+- Round 2: Gemini critiques and rewrites
+- Round 3: Claude critiques Gemini's rewrite and produces final answer
+
+**Save output to file:**
+```bash
+./cli/know debate "Your question here" > debate_output.md
+```
+
+- **Action:**
+    - Each model critiques the previous answer for unstated assumptions, missing information, and logical gaps.
+    - The final answer incorporates multiple rounds of refinement.
+    - All 3 rounds are printed to stdout for transparency.
 
 
 ## Directory Structure

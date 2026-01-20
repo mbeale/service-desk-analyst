@@ -603,8 +603,106 @@ case $COMMAND in
     echo "------------------------------------------------"
     ;;
 
+  debate)
+    QUESTION_TEXT="$@"
+    if [ -z "$QUESTION_TEXT" ]; then
+      echo "Usage: $0 [--claude] debate <your question>"
+      exit 1
+    fi
+
+    # Set model order based on --claude flag (parsed earlier in global options)
+    # LLM_CMD will be "claude" if --claude was passed, "gemini" otherwise
+    if [ "$LLM_CMD" = "claude" ]; then
+        MODEL_A="claude"
+        MODEL_A_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
+        MODEL_A_NAME="Claude"
+        MODEL_B="gemini"
+        MODEL_B_ARGS=""
+        MODEL_B_NAME="Gemini"
+    else
+        MODEL_A="gemini"
+        MODEL_A_ARGS=""
+        MODEL_A_NAME="Gemini"
+        MODEL_B="claude"
+        MODEL_B_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
+        MODEL_B_NAME="Claude"
+    fi
+
+    # Load context once
+    CONTEXT=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+    QUESTION_PROMPT=$(cat "$PROMPTS_DIR/question.md")
+    CRITIQUE_PROMPT=$(cat "$PROMPTS_DIR/debate_critique.md")
+
+    # === ROUND 1: Model A answers ===
+    echo "================================================"
+    echo "ROUND 1: $MODEL_A_NAME's Initial Answer"
+    echo "================================================"
+
+    TMP_PROMPT=$(mktemp)
+    echo "$QUESTION_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Context:" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Question:" >> "$TMP_PROMPT"
+    echo "$QUESTION_TEXT" >> "$TMP_PROMPT"
+
+    ANSWER_1=$(cat "$TMP_PROMPT" | $MODEL_A $MODEL_A_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+    echo "$ANSWER_1"
+
+    # === ROUND 2: Model B critiques & rewrites ===
+    echo ""
+    echo "================================================"
+    echo "ROUND 2: $MODEL_B_NAME's Critique & Rewrite"
+    echo "================================================"
+
+    TMP_PROMPT=$(mktemp)
+    echo "$CRITIQUE_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Original Question:" >> "$TMP_PROMPT"
+    echo "$QUESTION_TEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Previous Answer:" >> "$TMP_PROMPT"
+    echo "$ANSWER_1" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Knowledge Base Context:" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+
+    ANSWER_2=$(cat "$TMP_PROMPT" | $MODEL_B $MODEL_B_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+    echo "$ANSWER_2"
+
+    # === ROUND 3: Model A critiques & finalizes ===
+    echo ""
+    echo "================================================"
+    echo "ROUND 3: $MODEL_A_NAME's Final Synthesis"
+    echo "================================================"
+
+    TMP_PROMPT=$(mktemp)
+    echo "$CRITIQUE_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Original Question:" >> "$TMP_PROMPT"
+    echo "$QUESTION_TEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Previous Answer:" >> "$TMP_PROMPT"
+    echo "$ANSWER_2" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Knowledge Base Context:" >> "$TMP_PROMPT"
+    echo "$CONTEXT" >> "$TMP_PROMPT"
+
+    FINAL_ANSWER=$(cat "$TMP_PROMPT" | $MODEL_A $MODEL_A_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+    echo "$FINAL_ANSWER"
+
+    echo ""
+    echo "================================================"
+    echo "Debate Complete"
+    echo "================================================"
+    ;;
+
   *)
-    echo "Usage: $0 [--claude] {capture|classify|question|learn|refresh|garden|challenge} [arguments]"
+    echo "Usage: $0 [--claude] {capture|classify|question|learn|refresh|garden|challenge|debate} [arguments]"
     echo "Options:"
     echo "  --claude    Use Claude instead of Gemini (default), with web search enabled"
     exit 1

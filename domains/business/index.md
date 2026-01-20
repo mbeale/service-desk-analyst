@@ -4,6 +4,7 @@
 This domain covers the internal business strategy, financial metrics, pricing models, and operational goals of the SolarWinds Service Desk.
 
 ## Active Topics
+- [Pricing & Licensing](pricing_and_licensing.md): Service Desk tiers (Essentials, Advanced, Premier) and ITAM asset counting rules.
 - [Financial Performance](financial_performance.md): Tracking ARR, bookings, regional revenue breakdowns, and financial OKRs.
 - *No active topics tracked yet.*
 

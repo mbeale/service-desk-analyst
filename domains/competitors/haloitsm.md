@@ -1,0 +1,26 @@
+
+```markdown
+# HaloITSM Competitor Profile
+
+## Pricing & Licensing
+- **Model**: Flat rate, all-inclusive pricing structure.
+- **Cost**: Approximately ~$49-$70 per user/month.
+- **Key Differentiators**: 
+  - No tiered feature gating (includes AI and all features).
+  - Offers a **concurrent licensing** option, which can be cost-effective for shift-based teams.
+
+## Competitive Analysis
+
+### HaloITSM Strengths
+- **Pricing Simplicity**: Competes favorably against SWSD's tiered model by offering an "All-in" price.
+- **Feature Access**: AI and advanced features are included by default.
+
+### HaloITSM Weaknesses
+- **Project Management**: Lacks native Project Management capabilities.
+- **Usability**: Setup and configuration are reported as complex compared to SWSD.
+- **Ticket Management**: Lacks ticket locking (collision detection) features.
+
+### SWSD Competitive Stance
+- **SWSD Wins**: Emphasize **Native Project Management**, superior **Asset/CMDB depth**, and **Ease of Setup/Time-to-Value**.
+- **Counter-positioning**: Highlight the hidden costs of Halo's complexity versus SWSD's ease of use.
+```

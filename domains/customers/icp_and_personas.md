@@ -38,3 +38,8 @@
 *   **Legacy Tool Fatigue:** Outgrowing current solutions.
 *   **Compliance Audits:** Failing or preparing for SOC2, HIPAA, etc.
 *   **ESM Initiatives:** Mandate to extend service desk capabilities beyond IT (e.g., to HR or Facilities).
+
+```markdown
+### Target Market Definition
+- **Primary Focus**: Mid-sized and small emerging companies.
+```

@@ -98,3 +98,8 @@ Runbooks are automated workflows to structure incident resolution based on best 
 - SolarWinds Documentation: GenAI Suggested Solutions
 - SolarWinds Documentation: Runbooks
 ```
+
+### Implementation Strategy
+- [Fact] GenAI features (Premier plan) require a baseline of historical data (closed tickets, knowledge articles) to function effectively.
+- [Inference] New customers starting with a clean slate will not derive immediate value from Premier AI capabilities.
+- [Inference] The **Advanced plan** is recommended for new customers until sufficient historical data is accumulated to power GenAI features.

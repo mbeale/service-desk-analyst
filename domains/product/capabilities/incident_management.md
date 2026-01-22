@@ -29,3 +29,8 @@
   - Supports variables (e.g., `{{requester_full_name}}`).
 - **Chat**: Agents can handle multiple simultaneous sessions and convert chat logs directly into incidents.
 - **Satisfaction Surveys**: Triggered exclusively when an incident moves to the "Resolved" state.
+
+Add to the `Dropbox Emails` bullet list:
+```markdown
+  - **Portal Enforcement Gap**: There is no native setting to enforce ticket submission via the Service Portal exclusively while an email dropbox is active. To minimize email-based tickets, administrators must rely on "security through obscurity" by not publicizing the email dropbox address.
+```

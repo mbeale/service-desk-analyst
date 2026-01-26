@@ -17,6 +17,11 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
             LLM_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
             shift
             ;;
+        --kilo|--kilocode)
+            LLM_CMD="kilocode"
+            LLM_ARGS="--auto --nosplash"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -555,7 +560,7 @@ case $COMMAND in
         dir=$(dirname "$file")
         filename=$(basename "$file")
         index_file="$dir/index.md"
-        
+
         # If index exists, check content
         if [ -f "$index_file" ]; then
             if ! grep -q "$filename" "$index_file"; then
@@ -563,6 +568,68 @@ case $COMMAND in
             fi
         fi
     done
+
+    # Personal domain specific checks
+    PERSONAL_DIR="$DOMAINS_DIR/personal"
+
+    echo ""
+    echo "📋 Stale Projects (Active but no updates in 14+ days):"
+    FOUND_STALE=0
+    for f in "$PERSONAL_DIR/projects"/*.md; do
+        [ -f "$f" ] || continue
+        [ "$(basename "$f")" = "index.md" ] && continue
+        # Check if Active and old
+        if grep -q "Status:\*\* Active" "$f" 2>/dev/null; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                if [ $(find "$f" -mtime +14 2>/dev/null | wc -l) -gt 0 ]; then
+                    echo "   $f"
+                    FOUND_STALE=1
+                fi
+            else
+                if [ $(find "$f" -mtime +14 2>/dev/null | wc -l) -gt 0 ]; then
+                    echo "   $f"
+                    FOUND_STALE=1
+                fi
+            fi
+        fi
+    done
+    [ $FOUND_STALE -eq 0 ] && echo "   (None)"
+
+    echo ""
+    echo "🤔 Decisions Awaiting Reflection:"
+    FOUND_PENDING=0
+    for f in "$PERSONAL_DIR/decisions"/D-*.md; do
+        [ -f "$f" ] || continue
+        if grep -q "Status:\*\* Active" "$f" 2>/dev/null; then
+            DECISION=$(head -1 "$f" | sed 's/# Decision: //')
+            echo "   $(basename "$f"): $DECISION"
+            FOUND_PENDING=1
+        fi
+    done
+    [ $FOUND_PENDING -eq 0 ] && echo "   (None - all decisions reflected upon)"
+
+    echo ""
+    echo "🎯 Unchecked Goals:"
+    FOUND_GOALS=0
+    if [ -f "$PERSONAL_DIR/profile/goals.md" ]; then
+        UNCHECKED=$(grep -c "\- \[ \]" "$PERSONAL_DIR/profile/goals.md" 2>/dev/null) || UNCHECKED=0
+        if [ "$UNCHECKED" -gt 0 ] 2>/dev/null; then
+            echo "   $UNCHECKED unchecked goals in profile/goals.md"
+            grep "\- \[ \]" "$PERSONAL_DIR/profile/goals.md" 2>/dev/null | head -5 | sed 's/^/   /'
+            FOUND_GOALS=1
+        fi
+    fi
+    for f in "$PERSONAL_DIR/projects"/*.md; do
+        [ -f "$f" ] || continue
+        [ "$(basename "$f")" = "index.md" ] && continue
+        UNCHECKED=$(grep -c "\- \[ \]" "$f" 2>/dev/null) || UNCHECKED=0
+        if [ "$UNCHECKED" -gt 0 ] 2>/dev/null; then
+            echo "   $UNCHECKED unchecked goals in $(basename "$f")"
+            FOUND_GOALS=1
+        fi
+    done
+    [ $FOUND_GOALS -eq 0 ] && echo "   (None - all goals checked!)"
+
     echo "================================================"
     ;;
 
@@ -606,12 +673,11 @@ case $COMMAND in
   debate)
     QUESTION_TEXT="$@"
     if [ -z "$QUESTION_TEXT" ]; then
-      echo "Usage: $0 [--claude] debate <your question>"
+      echo "Usage: $0 [--claude|--kilo] debate <your question>"
       exit 1
     fi
 
-    # Set model order based on --claude flag (parsed earlier in global options)
-    # LLM_CMD will be "claude" if --claude was passed, "gemini" otherwise
+    # Set model order based on flags
     if [ "$LLM_CMD" = "claude" ]; then
         MODEL_A="claude"
         MODEL_A_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
@@ -619,6 +685,13 @@ case $COMMAND in
         MODEL_B="gemini"
         MODEL_B_ARGS=""
         MODEL_B_NAME="Gemini"
+    elif [ "$LLM_CMD" = "kilocode" ]; then
+        MODEL_A="kilocode"
+        MODEL_A_ARGS="--auto --nosplash"
+        MODEL_A_NAME="Kilocode"
+        MODEL_B="claude"
+        MODEL_B_ARGS="--print --output-format text --allowedTools WebSearch,WebFetch"
+        MODEL_B_NAME="Claude"
     else
         MODEL_A="gemini"
         MODEL_A_ARGS=""
@@ -701,10 +774,671 @@ case $COMMAND in
     echo "================================================"
     ;;
 
+  project)
+    PROJECTS_DIR="$DOMAINS_DIR/personal/projects"
+
+    # Handle 'list' subcommand
+    if [ "$1" = "list" ]; then
+        echo "================================================"
+        echo "Active Projects"
+        echo "================================================"
+        for f in "$PROJECTS_DIR"/*.md; do
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = "index.md" ] && continue
+            NAME=$(basename "$f" .md)
+            STATUS=$(grep -m1 "^\*\*Status:\*\*" "$f" 2>/dev/null | cut -d':' -f2 | xargs)
+            echo "- $NAME: ${STATUS:-Unknown}"
+        done
+        exit 0
+    fi
+
+    PROJECT_NAME="$1"
+    shift
+
+    if [ -z "$PROJECT_NAME" ]; then
+        echo "Usage: $0 project <name> [note]"
+        echo "       $0 project <name> --goal <goal>"
+        echo "       $0 project <name> --blocker <blocker>"
+        echo "       $0 project list"
+        exit 1
+    fi
+
+    # Sanitize project name for filename
+    PROJECT_SLUG=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_')
+    PROJECT_FILE="$PROJECTS_DIR/${PROJECT_SLUG}.md"
+
+    # Parse subcommands
+    UPDATE_TYPE="note"
+    UPDATE_CONTENT=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --goal)
+                UPDATE_TYPE="goal"
+                shift
+                UPDATE_CONTENT="$*"
+                break
+                ;;
+            --blocker)
+                UPDATE_TYPE="blocker"
+                shift
+                UPDATE_CONTENT="$*"
+                break
+                ;;
+            *)
+                UPDATE_CONTENT="$UPDATE_CONTENT $1"
+                shift
+                ;;
+        esac
+    done
+    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | xargs)
+
+    if [ -z "$UPDATE_CONTENT" ]; then
+        echo "Error: No content provided for project update."
+        exit 1
+    fi
+
+    TODAY=$(date +%Y-%m-%d)
+
+    # Create new project file if it doesn't exist
+    if [ ! -f "$PROJECT_FILE" ]; then
+        echo "Creating new project: $PROJECT_NAME"
+        cat > "$PROJECT_FILE" << EOF
+# Project: $PROJECT_NAME
+**Status:** Active
+**Started:** $TODAY
+**Target:** TBD
+
+## Goals
+*No goals yet*
+
+## Milestones
+*No milestones yet*
+
+## Current Blockers
+*No blockers*
+
+## Notes
+EOF
+        # Update index
+        echo "- [$PROJECT_NAME](${PROJECT_SLUG}.md): Active project" >> "$PROJECTS_DIR/index.md"
+    fi
+
+    # Append update based on type
+    case "$UPDATE_TYPE" in
+        goal)
+            # Add to Goals section
+            sed -i '' "s/\*No goals yet\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No goals yet\*//" "$PROJECT_FILE"
+            # Find Goals section and append
+            awk -v goal="- [ ] $UPDATE_CONTENT *(Added: $TODAY)*" '
+                /^## Goals/ { print; getline; print goal; next }
+                { print }
+            ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
+            echo "Added goal to $PROJECT_NAME: $UPDATE_CONTENT"
+            ;;
+        blocker)
+            # Add to Blockers section
+            sed -i '' "s/\*No blockers\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No blockers\*//" "$PROJECT_FILE"
+            awk -v blocker="- $UPDATE_CONTENT *(Added: $TODAY)*" '
+                /^## Current Blockers/ { print; getline; print blocker; next }
+                { print }
+            ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
+            echo "Added blocker to $PROJECT_NAME: $UPDATE_CONTENT"
+            ;;
+        note)
+            # Append to Notes section
+            echo "" >> "$PROJECT_FILE"
+            echo "### $TODAY" >> "$PROJECT_FILE"
+            echo "$UPDATE_CONTENT" >> "$PROJECT_FILE"
+            echo "Added note to $PROJECT_NAME"
+            ;;
+    esac
+
+    echo "------------------------------------------------"
+    tail -20 "$PROJECT_FILE"
+    echo "------------------------------------------------"
+    ;;
+
+  interest)
+    INTERESTS_DIR="$DOMAINS_DIR/personal/interests"
+
+    # Handle 'list' subcommand
+    if [ "$1" = "list" ]; then
+        echo "================================================"
+        echo "Interests"
+        echo "================================================"
+        for f in "$INTERESTS_DIR"/*.md; do
+            [ -f "$f" ] || continue
+            [ "$(basename "$f")" = "index.md" ] && continue
+            NAME=$(basename "$f" .md | tr '_' ' ')
+            echo "- $NAME"
+        done
+        exit 0
+    fi
+
+    TOPIC_NAME="$1"
+    shift
+
+    if [ -z "$TOPIC_NAME" ]; then
+        echo "Usage: $0 interest <topic> [note]"
+        echo "       $0 interest <topic> --resource <url or description>"
+        echo "       $0 interest list"
+        exit 1
+    fi
+
+    # Sanitize topic name for filename
+    TOPIC_SLUG=$(echo "$TOPIC_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_')
+    TOPIC_FILE="$INTERESTS_DIR/${TOPIC_SLUG}.md"
+
+    # Parse subcommands
+    UPDATE_TYPE="note"
+    UPDATE_CONTENT=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --resource)
+                UPDATE_TYPE="resource"
+                shift
+                UPDATE_CONTENT="$*"
+                break
+                ;;
+            *)
+                UPDATE_CONTENT="$UPDATE_CONTENT $1"
+                shift
+                ;;
+        esac
+    done
+    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | xargs)
+
+    if [ -z "$UPDATE_CONTENT" ]; then
+        echo "Error: No content provided for interest update."
+        exit 1
+    fi
+
+    TODAY=$(date +%Y-%m-%d)
+
+    # Create new interest file if it doesn't exist
+    if [ ! -f "$TOPIC_FILE" ]; then
+        echo "Creating new interest: $TOPIC_NAME"
+        cat > "$TOPIC_FILE" << EOF
+# Interest: $TOPIC_NAME
+**Started Exploring:** $TODAY
+
+## Why This Interests Me
+*TBD*
+
+## Key Resources
+*No resources yet*
+
+## Insights
+*No insights yet*
+
+## Notes
+EOF
+        # Update index
+        echo "- [$TOPIC_NAME](${TOPIC_SLUG}.md): Area of interest" >> "$INTERESTS_DIR/index.md"
+    fi
+
+    # Append update based on type
+    case "$UPDATE_TYPE" in
+        resource)
+            sed -i '' "s/\*No resources yet\*//" "$TOPIC_FILE" 2>/dev/null || sed -i "s/\*No resources yet\*//" "$TOPIC_FILE"
+            awk -v resource="- $UPDATE_CONTENT *(Added: $TODAY)*" '
+                /^## Key Resources/ { print; getline; print resource; next }
+                { print }
+            ' "$TOPIC_FILE" > "${TOPIC_FILE}.tmp" && mv "${TOPIC_FILE}.tmp" "$TOPIC_FILE"
+            echo "Added resource to $TOPIC_NAME: $UPDATE_CONTENT"
+            ;;
+        note)
+            echo "" >> "$TOPIC_FILE"
+            echo "### $TODAY" >> "$TOPIC_FILE"
+            echo "$UPDATE_CONTENT" >> "$TOPIC_FILE"
+            echo "Added note to $TOPIC_NAME"
+            ;;
+    esac
+
+    echo "------------------------------------------------"
+    tail -15 "$TOPIC_FILE"
+    echo "------------------------------------------------"
+    ;;
+
+  profile)
+    PROFILE_DIR="$DOMAINS_DIR/personal/profile"
+
+    SUBCOMMAND="$1"
+    shift
+    UPDATE_CONTENT="$*"
+
+    if [ -z "$SUBCOMMAND" ]; then
+        echo "Usage: $0 profile skill <skill description>"
+        echo "       $0 profile experience <experience description>"
+        echo "       $0 profile goal <goal description>"
+        echo "       $0 profile show"
+        exit 1
+    fi
+
+    TODAY=$(date +%Y-%m-%d)
+
+    case "$SUBCOMMAND" in
+        show)
+            echo "================================================"
+            echo "Profile Overview"
+            echo "================================================"
+            echo ""
+            echo "=== Skills ==="
+            cat "$PROFILE_DIR/skills.md" 2>/dev/null | grep -v "^#" | grep -v "^\*\*Last" | head -20
+            echo ""
+            echo "=== Goals ==="
+            cat "$PROFILE_DIR/goals.md" 2>/dev/null | grep -v "^#" | grep -v "^\*\*Last" | head -20
+            exit 0
+            ;;
+        skill)
+            if [ -z "$UPDATE_CONTENT" ]; then
+                echo "Error: No skill description provided."
+                exit 1
+            fi
+            SKILLS_FILE="$PROFILE_DIR/skills.md"
+            # Add skill to Technical Skills section
+            sed -i '' "s/\*Add skills with proficiency level.*\*//" "$SKILLS_FILE" 2>/dev/null || sed -i "s/\*Add skills with proficiency level.*\*//" "$SKILLS_FILE"
+            awk -v skill="- $UPDATE_CONTENT" '
+                /^## Technical Skills/ { print; getline; print skill; next }
+                { print }
+            ' "$SKILLS_FILE" > "${SKILLS_FILE}.tmp" && mv "${SKILLS_FILE}.tmp" "$SKILLS_FILE"
+            # Update timestamp
+            sed -i '' "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$SKILLS_FILE" 2>/dev/null || sed -i "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$SKILLS_FILE"
+            echo "Added skill: $UPDATE_CONTENT"
+            ;;
+        experience)
+            if [ -z "$UPDATE_CONTENT" ]; then
+                echo "Error: No experience description provided."
+                exit 1
+            fi
+            EXP_FILE="$PROFILE_DIR/experience.md"
+            sed -i '' "s/\*Add current position.*\*//" "$EXP_FILE" 2>/dev/null || sed -i "s/\*Add current position.*\*//" "$EXP_FILE"
+            awk -v exp="- $UPDATE_CONTENT *(Added: $TODAY)*" '
+                /^## Key Accomplishments/ { print; getline; print exp; next }
+                { print }
+            ' "$EXP_FILE" > "${EXP_FILE}.tmp" && mv "${EXP_FILE}.tmp" "$EXP_FILE"
+            sed -i '' "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$EXP_FILE" 2>/dev/null || sed -i "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$EXP_FILE"
+            echo "Added experience: $UPDATE_CONTENT"
+            ;;
+        goal)
+            if [ -z "$UPDATE_CONTENT" ]; then
+                echo "Error: No goal description provided."
+                exit 1
+            fi
+            GOALS_FILE="$PROFILE_DIR/goals.md"
+            sed -i '' "s/\*Add immediate priorities.*\*//" "$GOALS_FILE" 2>/dev/null || sed -i "s/\*Add immediate priorities.*\*//" "$GOALS_FILE"
+            awk -v goal="- [ ] $UPDATE_CONTENT *(Added: $TODAY)*" '
+                /^## Short-Term Goals/ { print; getline; print goal; next }
+                { print }
+            ' "$GOALS_FILE" > "${GOALS_FILE}.tmp" && mv "${GOALS_FILE}.tmp" "$GOALS_FILE"
+            sed -i '' "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$GOALS_FILE" 2>/dev/null || sed -i "s/\*\*Last Updated:\*\*.*/\*\*Last Updated:\*\* $TODAY/" "$GOALS_FILE"
+            echo "Added goal: $UPDATE_CONTENT"
+            ;;
+        *)
+            echo "Unknown profile subcommand: $SUBCOMMAND"
+            echo "Use: skill, experience, goal, or show"
+            exit 1
+            ;;
+    esac
+    ;;
+
+  decide)
+    DECISIONS_DIR="$DOMAINS_DIR/personal/decisions"
+
+    # Handle 'reflect' subcommand
+    if [ "$1" = "reflect" ]; then
+        DECISION_FILE="$2"
+        if [ -z "$DECISION_FILE" ]; then
+            echo "Usage: $0 decide reflect <decision-file>"
+            echo "Available decisions:"
+            ls "$DECISIONS_DIR"/*.md 2>/dev/null | grep -v index.md | xargs -I {} basename {}
+            exit 1
+        fi
+
+        # Find the file
+        if [ ! -f "$DECISIONS_DIR/$DECISION_FILE" ]; then
+            DECISION_FILE="${DECISION_FILE}.md"
+        fi
+        if [ ! -f "$DECISIONS_DIR/$DECISION_FILE" ]; then
+            echo "Error: Decision file not found: $DECISION_FILE"
+            exit 1
+        fi
+
+        echo "Opening reflection for: $DECISION_FILE"
+        echo "Current decision:"
+        echo "------------------------------------------------"
+        cat "$DECISIONS_DIR/$DECISION_FILE"
+        echo "------------------------------------------------"
+        echo ""
+        echo "Enter your reflection (what happened, lessons learned):"
+        read -r REFLECTION
+
+        TODAY=$(date +%Y-%m-%d)
+        cat >> "$DECISIONS_DIR/$DECISION_FILE" << EOF
+
+## Reflection
+**Date:** $TODAY
+
+$REFLECTION
+EOF
+        # Update status
+        sed -i '' "s/\*\*Status:\*\* Active/\*\*Status:\*\* Reflected/" "$DECISIONS_DIR/$DECISION_FILE" 2>/dev/null || sed -i "s/\*\*Status:\*\* Active/\*\*Status:\*\* Reflected/" "$DECISIONS_DIR/$DECISION_FILE"
+        echo "Reflection added to $DECISION_FILE"
+        exit 0
+    fi
+
+    # Handle 'list' subcommand
+    if [ "$1" = "list" ]; then
+        echo "================================================"
+        echo "Decisions"
+        echo "================================================"
+        for f in "$DECISIONS_DIR"/D-*.md; do
+            [ -f "$f" ] || continue
+            NAME=$(head -1 "$f" | sed 's/# Decision: //')
+            STATUS=$(grep -m1 "^\*\*Status:\*\*" "$f" 2>/dev/null | cut -d':' -f2 | xargs)
+            DATE=$(grep -m1 "^\*\*Date:\*\*" "$f" 2>/dev/null | cut -d':' -f2 | xargs)
+            echo "- [$DATE] $NAME ($STATUS)"
+        done
+        exit 0
+    fi
+
+    # New decision
+    DECISION_TEXT=""
+    CONTEXT=""
+    EXPECTED=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --context)
+                shift
+                CONTEXT="$1"
+                shift
+                ;;
+            --expected)
+                shift
+                EXPECTED="$1"
+                shift
+                ;;
+            *)
+                DECISION_TEXT="$DECISION_TEXT $1"
+                shift
+                ;;
+        esac
+    done
+    DECISION_TEXT=$(echo "$DECISION_TEXT" | xargs)
+
+    if [ -z "$DECISION_TEXT" ]; then
+        echo "Usage: $0 decide <decision statement> [--context <why>] [--expected <outcome>]"
+        echo "       $0 decide reflect <decision-file>"
+        echo "       $0 decide list"
+        exit 1
+    fi
+
+    TODAY=$(date +%Y-%m-%d)
+    # Create slug from decision text
+    SLUG=$(echo "$DECISION_TEXT" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd '[:alnum:]-' | cut -c1-30)
+    DECISION_FILE="$DECISIONS_DIR/D-${TODAY}-${SLUG}.md"
+
+    cat > "$DECISION_FILE" << EOF
+# Decision: $DECISION_TEXT
+**Date:** $TODAY
+**Domain:** General
+**Status:** Active
+
+## Context
+${CONTEXT:-*Context not provided*}
+
+## Options Considered
+*Not documented*
+
+## Decision
+$DECISION_TEXT
+
+## Expected Outcome
+${EXPECTED:-*Expected outcome not specified*}
+
+## Reflection
+*To be added later with: ./cli/know decide reflect $(basename "$DECISION_FILE")*
+EOF
+
+    # Update index
+    echo "- [$(basename "$DECISION_FILE")]($(basename "$DECISION_FILE")): $DECISION_TEXT" >> "$DECISIONS_DIR/index.md"
+
+    echo "Decision recorded: $DECISION_FILE"
+    echo "------------------------------------------------"
+    cat "$DECISION_FILE"
+    echo "------------------------------------------------"
+    ;;
+
+  review)
+    REVIEW_TYPE="week"
+    PROJECT_FILTER=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --month)
+                REVIEW_TYPE="month"
+                shift
+                ;;
+            --project)
+                shift
+                PROJECT_FILTER="$1"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    echo "================================================"
+    if [ -n "$PROJECT_FILTER" ]; then
+        echo "Project Review: $PROJECT_FILTER"
+    elif [ "$REVIEW_TYPE" = "month" ]; then
+        echo "Monthly Review"
+    else
+        echo "Weekly Review"
+    fi
+    echo "================================================"
+
+    # Determine date range
+    if [ "$REVIEW_TYPE" = "month" ]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            SINCE_DATE=$(date -v-30d +%Y-%m-%d)
+        else
+            SINCE_DATE=$(date -d "30 days ago" +%Y-%m-%d)
+        fi
+        PERIOD="last 30 days"
+    else
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            SINCE_DATE=$(date -v-7d +%Y-%m-%d)
+        else
+            SINCE_DATE=$(date -d "7 days ago" +%Y-%m-%d)
+        fi
+        PERIOD="last 7 days"
+    fi
+
+    # Gather context
+    REVIEW_PROMPT=$(cat "$PROMPTS_DIR/review.md")
+
+    # Get recent register archives
+    RECENT_CAPTURES=""
+    for f in outputs/register_archive/*.md; do
+        [ -f "$f" ] || continue
+        FILE_DATE=$(basename "$f" | grep -o '[0-9]\{8\}' | head -1)
+        if [ -n "$FILE_DATE" ]; then
+            FILE_DATE_FMT="${FILE_DATE:0:4}-${FILE_DATE:4:2}-${FILE_DATE:6:2}"
+            if [[ "$FILE_DATE_FMT" > "$SINCE_DATE" ]] || [[ "$FILE_DATE_FMT" == "$SINCE_DATE" ]]; then
+                RECENT_CAPTURES="$RECENT_CAPTURES
+--- $(basename "$f") ---
+$(cat "$f")"
+            fi
+        fi
+    done
+
+    # Get project context
+    if [ -n "$PROJECT_FILTER" ]; then
+        PROJECT_SLUG=$(echo "$PROJECT_FILTER" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_')
+        PROJECT_CONTEXT=$(cat "$DOMAINS_DIR/personal/projects/${PROJECT_SLUG}.md" 2>/dev/null)
+    else
+        PROJECT_CONTEXT=$(cat "$DOMAINS_DIR/personal/projects"/*.md 2>/dev/null | head -200)
+    fi
+
+    # Get recent decisions
+    DECISIONS_CONTEXT=$(cat "$DOMAINS_DIR/personal/decisions"/D-*.md 2>/dev/null | head -100)
+
+    # Get profile context
+    PROFILE_CONTEXT=$(cat "$DOMAINS_DIR/personal/profile"/*.md 2>/dev/null)
+
+    # Build prompt
+    TMP_PROMPT=$(mktemp)
+    echo "$REVIEW_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "Review Period: $PERIOD (since $SINCE_DATE)" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Recent Captures ===" >> "$TMP_PROMPT"
+    echo "$RECENT_CAPTURES" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Projects ===" >> "$TMP_PROMPT"
+    echo "$PROJECT_CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Decisions ===" >> "$TMP_PROMPT"
+    echo "$DECISIONS_CONTEXT" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Profile (Goals) ===" >> "$TMP_PROMPT"
+    echo "$PROFILE_CONTEXT" >> "$TMP_PROMPT"
+
+    echo "Generating review..."
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+
+    echo ""
+    echo "$RESPONSE"
+    echo ""
+    echo "================================================"
+    ;;
+
+  connect)
+    QUERY="$*"
+
+    if [ -z "$QUERY" ]; then
+        echo "Usage: $0 connect <question about connections>"
+        echo "Example: $0 connect \"How does my interest in AI relate to the product roadmap?\""
+        exit 1
+    fi
+
+    echo "================================================"
+    echo "Finding Connections"
+    echo "================================================"
+    echo "Query: $QUERY"
+    echo ""
+
+    CONNECT_PROMPT=$(cat "$PROMPTS_DIR/connect.md")
+
+    # Gather ALL context for connection analysis
+    ALL_DOMAINS=$(find "$DOMAINS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+    LESSONS_CONTEXT=$(find "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+
+    TMP_PROMPT=$(mktemp)
+    echo "$CONNECT_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "User Question: $QUERY" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Knowledge Base Content ===" >> "$TMP_PROMPT"
+    echo "$ALL_DOMAINS" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Lessons ===" >> "$TMP_PROMPT"
+    echo "$LESSONS_CONTEXT" >> "$TMP_PROMPT"
+
+    echo "Analyzing connections..."
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+
+    echo ""
+    echo "$RESPONSE"
+    echo ""
+    echo "================================================"
+    ;;
+
+  prep)
+    PERSON=""
+    TOPIC=""
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --topic)
+                shift
+                TOPIC="$1"
+                shift
+                ;;
+            *)
+                if [ -z "$PERSON" ]; then
+                    PERSON="$1"
+                else
+                    TOPIC="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [ -z "$PERSON" ] && [ -z "$TOPIC" ]; then
+        echo "Usage: $0 prep <person> [topic]"
+        echo "       $0 prep --topic <topic>"
+        echo "Example: $0 prep \"John Smith\" \"Q1 Planning\""
+        echo "         $0 prep --topic \"Pricing strategy\""
+        exit 1
+    fi
+
+    echo "================================================"
+    if [ -n "$PERSON" ] && [ -n "$TOPIC" ]; then
+        echo "Meeting Prep: $PERSON - $TOPIC"
+    elif [ -n "$PERSON" ]; then
+        echo "Meeting Prep: $PERSON"
+    else
+        echo "Topic Briefing: $TOPIC"
+    fi
+    echo "================================================"
+
+    PREP_PROMPT=$(cat "$PROMPTS_DIR/prep.md")
+
+    # Gather relevant context
+    ALL_DOMAINS=$(find "$DOMAINS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+    LESSONS_CONTEXT=$(find "$LESSONS_DIR" -name "*.md" -exec cat {} + 2>/dev/null)
+
+    TMP_PROMPT=$(mktemp)
+    echo "$PREP_PROMPT" > "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    if [ -n "$PERSON" ]; then
+        echo "Person: $PERSON" >> "$TMP_PROMPT"
+    fi
+    if [ -n "$TOPIC" ]; then
+        echo "Topic: $TOPIC" >> "$TMP_PROMPT"
+    fi
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Knowledge Base Content ===" >> "$TMP_PROMPT"
+    echo "$ALL_DOMAINS" >> "$TMP_PROMPT"
+    echo "" >> "$TMP_PROMPT"
+    echo "=== Lessons ===" >> "$TMP_PROMPT"
+    echo "$LESSONS_CONTEXT" >> "$TMP_PROMPT"
+
+    echo "Generating briefing..."
+    RESPONSE=$(cat "$TMP_PROMPT" | $LLM_CMD $LLM_ARGS 2>&1)
+    rm "$TMP_PROMPT"
+
+    echo ""
+    echo "$RESPONSE"
+    echo ""
+    echo "================================================"
+    ;;
+
   *)
-    echo "Usage: $0 [--claude] {capture|classify|question|learn|refresh|garden|challenge|debate} [arguments]"
+    echo "Usage: $0 [--claude|--kilo] {capture|classify|question|learn|refresh|garden|challenge|debate|project|interest|profile|decide|review|connect|prep} [arguments]"
     echo "Options:"
     echo "  --claude    Use Claude instead of Gemini (default), with web search enabled"
+    echo "  --kilo      Use Kilocode instead of Gemini"
     exit 1
     ;;
 esac

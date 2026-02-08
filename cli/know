@@ -39,7 +39,89 @@ COMMAND=$1
 shift
 # Remaining arguments are in "$@"
 
+# Helper for TUI menus
+ui_menu() {
+    local title="$1"
+    shift
+    local options=("$@")
+    
+    echo "================================================"
+    echo "  $title"
+    echo "================================================"
+    
+    local i=1
+    for opt in "${options[@]}"; do
+        echo "$i) $opt"
+        ((i++))
+    done
+    echo "q) Quit"
+    echo "------------------------------------------------"
+    read -p "Select an option: " choice
+    
+    if [[ "$choice" == "q" ]]; then
+        return 255
+    fi
+    
+    if [[ "$choice" -ge 1 && "$choice" -le "${#options[@]}" ]]; then
+        return $((choice - 1))
+    else
+        echo "Invalid choice."
+        return 254
+    fi
+}
+
 case $COMMAND in
+  browse)
+    while true; do
+        DOMAINS=$(ls -d "$DOMAINS_DIR"/*/ | xargs -n 1 basename)
+        OPTIONS=($DOMAINS "lessons" "register.md")
+        
+        ui_menu "Knowledge Browser" "${OPTIONS[@]}"
+        CHOICE=$?
+        
+        if [ $CHOICE -eq 255 ]; then break; fi
+        if [ $CHOICE -eq 254 ]; then continue; fi
+        
+        SELECTED="${OPTIONS[$CHOICE]}"
+        
+        if [[ "$SELECTED" == "register.md" ]]; then
+            ${EDITOR:-vim} "$REGISTER_FILE"
+            continue
+        fi
+        
+        # Sub-menu for directory
+        if [[ "$SELECTED" == "lessons" ]]; then
+            SUB_DIR="$LESSONS_DIR"
+        else
+            SUB_DIR="$DOMAINS_DIR/$SELECTED"
+        fi
+        
+        while true; do
+            FILES=$(ls "$SUB_DIR" | grep ".md")
+            FILE_OPTIONS=($FILES)
+            
+            ui_menu "Browse: $SELECTED" "${FILE_OPTIONS[@]}"
+            FILE_CHOICE=$?
+            
+            if [ $FILE_CHOICE -eq 255 ]; then break; fi
+            if [ $FILE_CHOICE -eq 254 ]; then continue; fi
+            
+            FILE_PATH="$SUB_DIR/${FILE_OPTIONS[$FILE_CHOICE]}"
+            
+            echo "1) View"
+            echo "2) Edit"
+            echo "3) Back"
+            read -p "Action: " action
+            
+            case $action in
+                1) less "$FILE_PATH" ;;
+                2) ${EDITOR:-vim} "$FILE_PATH" ;;
+                3) break ;;
+            esac
+        done
+    done
+    ;;
+
   capture)
     AUTO_MERGE=0
     INPUT_ARGS=""
@@ -260,6 +342,29 @@ case $COMMAND in
     else
         echo "Error writing merge file."
     fi
+    ;;
+
+  map)
+    (
+    echo "digraph G {"
+    echo "  node [shape=box, style=filled, color=lightblue];"
+    echo "  rankdir=LR;"
+    
+    # Scan for links
+    find "$DOMAINS_DIR" -name "*.md" -print0 | while IFS= read -r -d '' file; do
+        BASE_SRC=$(basename "$file" .md)
+        # Match standard links [text](target.md)
+        grep -o "\[.*\](.*\.md)" "$file" | sed 's/.*(\(.*\).md)/\1/' | while read -r target; do
+            BASE_TARGET=$(basename "$target" .md)
+            echo "  \"$BASE_SRC\" -> \"$BASE_TARGET\";"
+        done
+        # Match wiki links [[target]]
+        grep -o "\[\[.*\]\]" "$file" | sed 's/\[\[\(.*\)\]\]/\1/' | while read -r target; do
+            echo "  \"$BASE_SRC\" -> \"$target\";"
+        done
+    done
+    echo "}"
+    ) | python3 cli/render_graph.py
     ;;
 
   merge)
@@ -531,13 +636,40 @@ case $COMMAND in
     ;;
 
   garden)
+    INTERACTIVE=0
+    if [[ "$1" == "--interactive" || "$1" == "-i" ]]; then
+        INTERACTIVE=1
+    fi
+
     echo "================================================"
     echo "🌿 Knowledge Garden Audit"
     echo "================================================"
     
+    # ... (rest of standard audit output)
+    
     echo ""
     echo "🍂 Stale Files (>60 days since update):"
     STALE_FILES=$(find "$DOMAINS_DIR" "$LESSONS_DIR" -name "*.md" -mtime +60 2>/dev/null)
+    
+    if [ $INTERACTIVE -eq 1 ]; then
+        if [ -n "$STALE_FILES" ]; then
+            echo "Entering interactive refresh..."
+            for f in $STALE_FILES; do
+                echo "---"
+                echo "File: $f"
+                echo "Last modified: $(date -r "$f")"
+                read -p "Refresh this file now? (y/n/q): " act
+                case "$act" in
+                    y) "$0" refresh "$f" ;;
+                    q) break ;;
+                esac
+            done
+        else
+            echo "No stale files to refresh."
+        fi
+        exit 0
+    fi
+    
     if [ -z "$STALE_FILES" ]; then
         echo "   (None - Good job!)"
     else
@@ -830,7 +962,7 @@ case $COMMAND in
                 ;;
         esac
     done
-    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | xargs)
+    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
     if [ -z "$UPDATE_CONTENT" ]; then
         echo "Error: No content provided for project update."
@@ -870,7 +1002,7 @@ EOF
             sed -i '' "s/\*No goals yet\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No goals yet\*//" "$PROJECT_FILE"
             # Find Goals section and append
             awk -v goal="- [ ] $UPDATE_CONTENT *(Added: $TODAY)*" '
-                /^## Goals/ { print; getline; print goal; next }
+                /^## Goals/ { print; print goal; next }
                 { print }
             ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
             echo "Added goal to $PROJECT_NAME: $UPDATE_CONTENT"
@@ -879,7 +1011,7 @@ EOF
             # Add to Blockers section
             sed -i '' "s/\*No blockers\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No blockers\*//" "$PROJECT_FILE"
             awk -v blocker="- $UPDATE_CONTENT *(Added: $TODAY)*" '
-                /^## Current Blockers/ { print; getline; print blocker; next }
+                /^## Current Blockers/ { print; print blocker; next }
                 { print }
             ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
             echo "Added blocker to $PROJECT_NAME: $UPDATE_CONTENT"
@@ -946,7 +1078,7 @@ EOF
                 ;;
         esac
     done
-    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | xargs)
+    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
     if [ -z "$UPDATE_CONTENT" ]; then
         echo "Error: No content provided for interest update."
@@ -1435,10 +1567,15 @@ $(cat "$f")"
     ;;
 
   *)
-    echo "Usage: $0 [--claude|--kilo] {capture|classify|question|learn|refresh|garden|challenge|debate|project|interest|profile|decide|review|connect|prep} [arguments]"
+    echo "Usage: $0 [--claude|--kilo] {browse|capture|classify|question|learn|refresh|garden|challenge|debate|project|interest|profile|decide|review|connect|prep|map} [arguments]"
     echo "Options:"
     echo "  --claude    Use Claude instead of Gemini (default), with web search enabled"
     echo "  --kilo      Use Kilocode instead of Gemini"
+    echo ""
+    echo "Commands:"
+    echo "  browse      Interactive TUI to browse and edit your knowledge"
+    echo "  garden      Audit knowledge base. Use --interactive (-i) to refresh stale files."
+    echo "  map         Generate a Graphviz DOT map of knowledge connections"
     exit 1
     ;;
 esac

@@ -34,3 +34,11 @@
 - **Channels:**
   - SMS Support for ITSM (Design Phase) (ITSM-51575)
 ```
+
+```markdown
+### Q2 2026
+- **Chatbot V2 (Agentic AI)**
+    - **Status**: Planned for end of Q2 delivery.
+    - **Goal**: Introduce agentic AI capabilities that extend beyond current feature sets.
+    - **Strategy**: Currently evaluating implementation paths (leveraging third-party solutions vs. internal development).
+```

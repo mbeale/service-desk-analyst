@@ -25,7 +25,7 @@
 
 ```markdown
 ## Long-Term Targets
-- Target goal of $1,000,000 ARR within the next 3 years (Source: User Input, 2026-02-12).
+- Target goal of $100,000,000 ARR within the next 3 years (Source: User Input, 2026-02-12).
 ```
 
 ```markdown

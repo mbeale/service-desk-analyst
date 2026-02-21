@@ -15,7 +15,6 @@ Non-obvious relationships that might be valuable:
 
 ### Potential Synergies
 Opportunities where combining knowledge from different areas could create value:
-- Projects that could benefit from certain interests
 - Business knowledge that informs personal decisions
 - Cross-pollination opportunities
 

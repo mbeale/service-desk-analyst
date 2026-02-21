@@ -218,7 +218,6 @@ Then run:
     - **Stale Files:** Content not updated in >60 days.
     - **Empty Files:** Placeholders with no content.
     - **Orphaned Files:** Leaf files that are not linked in their parent `index.md`.
-    - **Stale Projects:** Active projects with no updates in 14+ days.
     - **Decisions Awaiting Reflection:** Decisions that haven't been reflected upon.
     - **Unchecked Goals:** Goals still marked as incomplete.
 
@@ -301,26 +300,10 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
     - All 3 rounds are printed to stdout for transparency.
 
 
-## 9. Project (Personal Tracking)
-
-**Goal:** Track projects with goals, blockers, and progress notes.
-
-```bash
-# Add a note to a project (creates project if new)
-./cli/know project "SWSD Knowledge Base" "Completed Phase 1 domain structure"
-
-# Add a goal
-./cli/know project "SWSD Knowledge Base" --goal "Complete Phase 2 commands"
-
-# Add a blocker
-./cli/know project "Side Project" --blocker "Waiting on API access"
-
-# List all projects
-./cli/know project list
-```
 
 
-## 10. Interest (Learning Tracker)
+
+## 9. Interest (Learning Tracker)
 
 **Goal:** Track topics you're learning and resources you've collected.
 
@@ -336,7 +319,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 ```
 
 
-## 11. Profile (Skills & Goals)
+## 10. Profile (Skills & Goals)
 
 **Goal:** Maintain your professional profile with skills, experience, and goals.
 
@@ -355,7 +338,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 ```
 
 
-## 12. Decide (Decision Journal)
+## 11. Decide (Decision Journal)
 
 **Goal:** Record major decisions with context for future reflection.
 
@@ -373,7 +356,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 ```
 
 
-## 13. Review (Periodic Summaries)
+## 12. Review (Periodic Summaries)
 
 **Goal:** Generate weekly or monthly reviews of activity and progress.
 
@@ -383,18 +366,15 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 
 # Monthly review (last 30 days)
 ./cli/know review --month
-
-# Project-specific review
-./cli/know review --project "SWSD Knowledge Base"
 ```
 
 - **Action:**
-    - Summarizes recent captures, project progress, and decisions
+    - Summarizes recent captures and decisions
     - Identifies patterns and connections
     - Suggests focus areas and questions to consider
 
 
-## 14. Connect (Cross-Domain Analysis)
+## 13. Connect (Cross-Domain Analysis)
 
 **Goal:** Find relationships between different parts of your knowledge base.
 
@@ -402,8 +382,6 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 # Find connections between topics
 ./cli/know connect "How does my interest in AI relate to the SWSD product roadmap?"
 
-# Discover patterns
-./cli/know connect "What patterns exist across my projects?"
 
 # Cross-reference personal and business
 ./cli/know connect "Which of my skills are most relevant to current business challenges?"
@@ -415,7 +393,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
     - Suggests follow-up actions
 
 
-## 15. Prep (Meeting Preparation)
+## 14. Prep (Meeting Preparation)
 
 **Goal:** Generate briefing documents for meetings.
 
@@ -431,7 +409,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 ```
 
 - **Action:**
-    - Compiles relevant facts, projects, and decisions
+    - Compiles relevant facts and decisions
     - Suggests talking points and questions to ask
     - Flags potential concerns or information gaps
 
@@ -442,7 +420,7 @@ The debate command runs a 3-round adversarial collaboration between Gemini and C
 
 - `domains/`: The structured knowledge base.
     - `business/`, `competitors/`, `customers/`, `market/`, `product/`: Business domains
-    - `personal/`: Personal knowledge (projects, interests, profile, decisions)
+    - `personal/`: Personal knowledge (interests, profile, decisions)
 
 - `lessons/`: Corrections and strategic decisions that override older context.
 

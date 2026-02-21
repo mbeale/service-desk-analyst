@@ -7,11 +7,6 @@ Your task is to analyze recent activity and produce an insightful review that he
 ### Summary
 Brief overview of the review period (2-3 sentences)
 
-### Projects
-- Active projects and their status
-- Progress made during this period
-- Blockers encountered
-
 ### Captures & Learning
 - Key facts or insights captured
 - New interests explored

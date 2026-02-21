@@ -705,29 +705,6 @@ case $COMMAND in
     PERSONAL_DIR="$DOMAINS_DIR/personal"
 
     echo ""
-    echo "📋 Stale Projects (Active but no updates in 14+ days):"
-    FOUND_STALE=0
-    for f in "$PERSONAL_DIR/projects"/*.md; do
-        [ -f "$f" ] || continue
-        [ "$(basename "$f")" = "index.md" ] && continue
-        # Check if Active and old
-        if grep -q "Status:\*\* Active" "$f" 2>/dev/null; then
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                if [ $(find "$f" -mtime +14 2>/dev/null | wc -l) -gt 0 ]; then
-                    echo "   $f"
-                    FOUND_STALE=1
-                fi
-            else
-                if [ $(find "$f" -mtime +14 2>/dev/null | wc -l) -gt 0 ]; then
-                    echo "   $f"
-                    FOUND_STALE=1
-                fi
-            fi
-        fi
-    done
-    [ $FOUND_STALE -eq 0 ] && echo "   (None)"
-
-    echo ""
     echo "🤔 Decisions Awaiting Reflection:"
     FOUND_PENDING=0
     for f in "$PERSONAL_DIR/decisions"/D-*.md; do
@@ -751,15 +728,6 @@ case $COMMAND in
             FOUND_GOALS=1
         fi
     fi
-    for f in "$PERSONAL_DIR/projects"/*.md; do
-        [ -f "$f" ] || continue
-        [ "$(basename "$f")" = "index.md" ] && continue
-        UNCHECKED=$(grep -c "\- \[ \]" "$f" 2>/dev/null) || UNCHECKED=0
-        if [ "$UNCHECKED" -gt 0 ] 2>/dev/null; then
-            echo "   $UNCHECKED unchecked goals in $(basename "$f")"
-            FOUND_GOALS=1
-        fi
-    done
     [ $FOUND_GOALS -eq 0 ] && echo "   (None - all goals checked!)"
 
     echo "================================================"
@@ -904,130 +872,6 @@ case $COMMAND in
     echo "================================================"
     echo "Debate Complete"
     echo "================================================"
-    ;;
-
-  project)
-    PROJECTS_DIR="$DOMAINS_DIR/personal/projects"
-
-    # Handle 'list' subcommand
-    if [ "$1" = "list" ]; then
-        echo "================================================"
-        echo "Active Projects"
-        echo "================================================"
-        for f in "$PROJECTS_DIR"/*.md; do
-            [ -f "$f" ] || continue
-            [ "$(basename "$f")" = "index.md" ] && continue
-            NAME=$(basename "$f" .md)
-            STATUS=$(grep -m1 "^\*\*Status:\*\*" "$f" 2>/dev/null | cut -d':' -f2 | xargs)
-            echo "- $NAME: ${STATUS:-Unknown}"
-        done
-        exit 0
-    fi
-
-    PROJECT_NAME="$1"
-    shift
-
-    if [ -z "$PROJECT_NAME" ]; then
-        echo "Usage: $0 project <name> [note]"
-        echo "       $0 project <name> --goal <goal>"
-        echo "       $0 project <name> --blocker <blocker>"
-        echo "       $0 project list"
-        exit 1
-    fi
-
-    # Sanitize project name for filename
-    PROJECT_SLUG=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_')
-    PROJECT_FILE="$PROJECTS_DIR/${PROJECT_SLUG}.md"
-
-    # Parse subcommands
-    UPDATE_TYPE="note"
-    UPDATE_CONTENT=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --goal)
-                UPDATE_TYPE="goal"
-                shift
-                UPDATE_CONTENT="$*"
-                break
-                ;;
-            --blocker)
-                UPDATE_TYPE="blocker"
-                shift
-                UPDATE_CONTENT="$*"
-                break
-                ;;
-            *)
-                UPDATE_CONTENT="$UPDATE_CONTENT $1"
-                shift
-                ;;
-        esac
-    done
-    UPDATE_CONTENT=$(echo "$UPDATE_CONTENT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-
-    if [ -z "$UPDATE_CONTENT" ]; then
-        echo "Error: No content provided for project update."
-        exit 1
-    fi
-
-    TODAY=$(date +%Y-%m-%d)
-
-    # Create new project file if it doesn't exist
-    if [ ! -f "$PROJECT_FILE" ]; then
-        echo "Creating new project: $PROJECT_NAME"
-        cat > "$PROJECT_FILE" << EOF
-# Project: $PROJECT_NAME
-**Status:** Active
-**Started:** $TODAY
-**Target:** TBD
-
-## Goals
-*No goals yet*
-
-## Milestones
-*No milestones yet*
-
-## Current Blockers
-*No blockers*
-
-## Notes
-EOF
-        # Update index
-        echo "- [$PROJECT_NAME](${PROJECT_SLUG}.md): Active project" >> "$PROJECTS_DIR/index.md"
-    fi
-
-    # Append update based on type
-    case "$UPDATE_TYPE" in
-        goal)
-            # Add to Goals section
-            sed -i '' "s/\*No goals yet\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No goals yet\*//" "$PROJECT_FILE"
-            # Find Goals section and append
-            awk -v goal="- [ ] $UPDATE_CONTENT *(Added: $TODAY)*" '
-                /^## Goals/ { print; print goal; next }
-                { print }
-            ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
-            echo "Added goal to $PROJECT_NAME: $UPDATE_CONTENT"
-            ;;
-        blocker)
-            # Add to Blockers section
-            sed -i '' "s/\*No blockers\*//" "$PROJECT_FILE" 2>/dev/null || sed -i "s/\*No blockers\*//" "$PROJECT_FILE"
-            awk -v blocker="- $UPDATE_CONTENT *(Added: $TODAY)*" '
-                /^## Current Blockers/ { print; print blocker; next }
-                { print }
-            ' "$PROJECT_FILE" > "${PROJECT_FILE}.tmp" && mv "${PROJECT_FILE}.tmp" "$PROJECT_FILE"
-            echo "Added blocker to $PROJECT_NAME: $UPDATE_CONTENT"
-            ;;
-        note)
-            # Append to Notes section
-            echo "" >> "$PROJECT_FILE"
-            echo "### $TODAY" >> "$PROJECT_FILE"
-            echo "$UPDATE_CONTENT" >> "$PROJECT_FILE"
-            echo "Added note to $PROJECT_NAME"
-            ;;
-    esac
-
-    echo "------------------------------------------------"
-    tail -20 "$PROJECT_FILE"
-    echo "------------------------------------------------"
     ;;
 
   interest)
@@ -1344,18 +1188,12 @@ EOF
 
   review)
     REVIEW_TYPE="week"
-    PROJECT_FILTER=""
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --month)
                 REVIEW_TYPE="month"
-                shift
-                ;;
-            --project)
-                shift
-                PROJECT_FILTER="$1"
                 shift
                 ;;
             *)
@@ -1365,9 +1203,7 @@ EOF
     done
 
     echo "================================================"
-    if [ -n "$PROJECT_FILTER" ]; then
-        echo "Project Review: $PROJECT_FILTER"
-    elif [ "$REVIEW_TYPE" = "month" ]; then
+    if [ "$REVIEW_TYPE" = "month" ]; then
         echo "Monthly Review"
     else
         echo "Weekly Review"
@@ -1409,14 +1245,6 @@ $(cat "$f")"
         fi
     done
 
-    # Get project context
-    if [ -n "$PROJECT_FILTER" ]; then
-        PROJECT_SLUG=$(echo "$PROJECT_FILTER" | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -cd '[:alnum:]_')
-        PROJECT_CONTEXT=$(cat "$DOMAINS_DIR/personal/projects/${PROJECT_SLUG}.md" 2>/dev/null)
-    else
-        PROJECT_CONTEXT=$(cat "$DOMAINS_DIR/personal/projects"/*.md 2>/dev/null | head -200)
-    fi
-
     # Get recent decisions
     DECISIONS_CONTEXT=$(cat "$DOMAINS_DIR/personal/decisions"/D-*.md 2>/dev/null | head -100)
 
@@ -1431,9 +1259,6 @@ $(cat "$f")"
     echo "" >> "$TMP_PROMPT"
     echo "=== Recent Captures ===" >> "$TMP_PROMPT"
     echo "$RECENT_CAPTURES" >> "$TMP_PROMPT"
-    echo "" >> "$TMP_PROMPT"
-    echo "=== Projects ===" >> "$TMP_PROMPT"
-    echo "$PROJECT_CONTEXT" >> "$TMP_PROMPT"
     echo "" >> "$TMP_PROMPT"
     echo "=== Decisions ===" >> "$TMP_PROMPT"
     echo "$DECISIONS_CONTEXT" >> "$TMP_PROMPT"
@@ -1567,7 +1392,7 @@ $(cat "$f")"
     ;;
 
   *)
-    echo "Usage: $0 [--claude|--kilo] {browse|capture|classify|question|learn|refresh|garden|challenge|debate|project|interest|profile|decide|review|connect|prep|map} [arguments]"
+    echo "Usage: $0 [--claude|--kilo] {browse|capture|classify|question|learn|refresh|garden|challenge|debate|interest|profile|decide|review|connect|prep|map} [arguments]"
     echo "Options:"
     echo "  --claude    Use Claude instead of Gemini (default), with web search enabled"
     echo "  --kilo      Use Kilocode instead of Gemini"

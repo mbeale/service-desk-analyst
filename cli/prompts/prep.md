@@ -13,11 +13,6 @@ Bullet points of the most important facts from the knowledge base:
 - Recent developments
 - Historical context
 
-### Relevant Projects
-Projects that relate to this person/topic:
-- Status and recent progress
-- Blockers or needs
-- Upcoming milestones
 
 ### Related Decisions
 Past decisions that provide context:

@@ -3,7 +3,7 @@ Analyze the Input Note using the provided Domain Map (index files) and generate 
 
 Instructions:
 1. **Analyze Content**: Understand the core topic of the input note.
-   - Distinguish between business/market content and personal content (projects, interests, skills, goals, decisions).
+   - Distinguish between business/market content and personal content (interests, skills, goals, decisions).
    - Personal content should route to `domains/personal/` subdomains.
 2. **Consult Domain Map**: Look at the `index.md` files below.
    - Check the `Scope` and `Active Topics` of each domain.
